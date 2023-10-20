@@ -59,6 +59,17 @@ fn key_to_path(
     Ok((path, PathBuf::from(key_left)))
 }
 
+/// This function first tries to move a file, when that fails it falls back to copy and remove.
+fn move_or_copy_file(from_location: &PathBuf, to_location: &PathBuf) -> bool {
+    if fs::rename(from_location, to_location).is_ok() {
+        true
+    } else if fs::copy(from_location, to_location).is_ok() {
+        fs::remove_file(from_location).is_ok()
+    } else {
+        false
+    }
+}
+
 fn get_stored_keys_in_directory(
     directory: &Path,
     current_depth: u8,
@@ -191,12 +202,10 @@ where
         };
     }
 
-    if fs::rename(
-        temporary_file_location,
-        final_file_location_directory.join(final_file_name.clone()),
-    )
-    .is_err()
-    {
+    if !move_or_copy_file(
+        &temporary_file_location,
+        &final_file_location_directory.join(final_file_name.clone()),
+    ) {
         return Err("Failed to rename the temporary file to the final file location.".to_string());
     }
 
@@ -366,12 +375,10 @@ where
         };
     }
 
-    if fs::rename(
-        temporary_file_location,
-        final_file_location_directory.join(final_file_name.clone()),
-    )
-    .is_err()
-    {
+    if !move_or_copy_file(
+        &temporary_file_location,
+        &final_file_location_directory.join(final_file_name.clone()),
+    ) {
         return Err("Failed to rename the temporary file to the final file location.".to_string());
     }
 
