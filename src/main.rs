@@ -287,9 +287,10 @@ where
     };
 
     let Ok(mut file) = File::open(data_directory.join(Path::new(&path_to_file))) else {
-        return Err(
-            "Failed to open file, it might not be readable or it might not exist.".to_string(),
-        );
+        return Err(format!(
+            "Failed to open file {}, it might not be readable or it might not exist.",
+            path_to_file
+        ));
     };
 
     let Ok(metadata) = file.metadata() else {
@@ -419,9 +420,10 @@ where
     };
 
     let Ok(mut file) = File::open(data_directory.join(Path::new(&path_to_file))) else {
-        return Err(
-            "Failed to open file, it might not be readable or it might not exist.".to_string(),
-        );
+        return Err(format!(
+            "Failed to open file {}, it might not be readable or it might not exist.",
+            path_to_file
+        ));
     };
 
     let Ok(metadata) = file.metadata() else {
@@ -678,6 +680,10 @@ where
     let mut service_data_lock = service_data.lock().await;
     service_data_lock.connections_accepted += 1;
     drop(service_data_lock);
+
+    stream.flush().unwrap_or_else(|_| {
+        println!("SHUTDOWN Stream could not be flushed.");
+    });
 
     true
 }
