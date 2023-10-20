@@ -1,0 +1,33 @@
+---
+
+name: "Release packaging"
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  release:
+    name: Release Packaging
+    env:
+      PROJECT_NAME: berthad
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout the repository"
+        uses: actions/checkout@v2
+
+      - name: "Setup the Cargo toolchain"
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: "Release Build"
+        run: cargo build --release
+
+      - name: "Upload release build"
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.PROJECT_NAME }}
+          path: target/release/${{ env.PROJECT_NAME }}

@@ -1,0 +1,10 @@
+services:
+    berthad:
+        container_name: berthad
+        build: "."
+        restart: "always"
+        ports:
+        - 1234:1234
+        volumes:
+        - ./data/:/berthad/data/
+        - ./tmp/:/berthad/tmp/
