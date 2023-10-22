@@ -1,10 +1,10 @@
-use std::fs::File;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use std::{env, fs};
+use tokio::fs::File;
+use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -118,14 +118,14 @@ fn get_stored_keys_in_directory(
     keys
 }
 
-fn do_list_operation<T>(
+async fn do_list_operation<T>(
     stream: &mut T,
     data_directory: &Path,
     data_dir_depth: u8,
     data_dir_width: u8,
 ) -> Result<(), String>
 where
-    T: Write,
+    T: AsyncWrite + Unpin,
 {
     let stored_keys =
         get_stored_keys_in_directory(data_directory, 0, data_dir_depth, data_dir_width);
@@ -133,7 +133,7 @@ where
         if key.len() == 64 {
             let mut decoded = [0; 32];
             let decode_succeeded = hex::decode_to_slice(key, &mut decoded);
-            if decode_succeeded.is_ok() && stream.write(&decoded).is_err() {
+            if decode_succeeded.is_ok() && stream.write_all(&decoded).await.is_err() {
                 return Err("LIST Failed to write key to stream.".to_string());
             }
         }
@@ -149,28 +149,28 @@ async fn do_put_operation<T>(
     data_dir_width: u8,
 ) -> Result<(String, u64), String>
 where
-    T: Read + Write,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let temporary_file_uuid = Uuid::new_v4().to_string();
     let temporary_file_name = Path::new(&temporary_file_uuid);
     let temporary_file_location = temporary_directory.join(temporary_file_name);
 
-    let Ok(mut temporary_file) = File::create(temporary_file_location.clone()) else {
+    let Ok(mut temporary_file) = File::create(temporary_file_location.clone()).await else {
         return Err("Failed to open temporary file.".to_string());
     };
 
     let mut buffer = [0u8; 1024];
-    let Ok(mut read_amount) = stream.read(&mut buffer) else {
+    let Ok(mut read_amount) = stream.read(&mut buffer).await else {
         return Err("Failed to read file stream.".to_string());
     };
 
     let mut total_read_amount = read_amount;
 
     while read_amount > 0 {
-        let Ok(_) = temporary_file.write_all(&buffer[0..read_amount]) else {
+        let Ok(_) = temporary_file.write_all(&buffer[0..read_amount]).await else {
             return Err("Failed to write file stream to temporary file.".to_string());
         };
-        let result_read_amount = stream.read(&mut buffer);
+        let result_read_amount = stream.read(&mut buffer).await;
         if result_read_amount.is_err() {
             return Err("Failed to read file stream.".to_string());
         }
@@ -178,7 +178,7 @@ where
         total_read_amount += read_amount;
     }
 
-    let Ok(_) = temporary_file.flush() else {
+    let Ok(_) = temporary_file.flush().await else {
         return Err("Failed to flush temporary file.".to_string());
     };
 
@@ -214,7 +214,7 @@ where
         return Err("Failed to decode hash to bytes.".to_string());
     };
 
-    if stream.write(&decoded_hash).is_err() {
+    if stream.write_all(&decoded_hash).await.is_err() {
         return Err("Failed to write key to stream.".to_string());
     }
 
@@ -262,17 +262,17 @@ fn get_path_to_file(
     }
 }
 
-fn do_get_operation<T>(
+async fn do_get_operation<T>(
     stream: &mut T,
     data_directory: &Path,
     data_dir_depth: u8,
     data_dir_width: u8,
 ) -> Result<(String, u64), String>
 where
-    T: Read + Write,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let mut key_buffer = [0u8; 32];
-    let Ok(size_key_buffer_written) = stream.read(&mut key_buffer) else {
+    let Ok(size_key_buffer_written) = stream.read(&mut key_buffer).await else {
         return Err("Failed to read key.".to_string());
     };
 
@@ -286,18 +286,18 @@ where
         return Err("Failed to get path to file from given key.".to_string());
     };
 
-    let Ok(mut file) = File::open(data_directory.join(Path::new(&path_to_file))) else {
+    let Ok(mut file) = File::open(data_directory.join(Path::new(&path_to_file))).await else {
         return Err(format!(
             "Failed to open file {}, it might not be readable or it might not exist.",
             path_to_file
         ));
     };
 
-    let Ok(metadata) = file.metadata() else {
+    let Ok(metadata) = file.metadata().await else {
         return Err("Failed to get file metadata.".to_string());
     };
 
-    let Ok(_) = std::io::copy(&mut file, stream) else {
+    let Ok(_) = copy(&mut file, stream).await else {
         return Err("Failed to write file to stream.".to_string());
     };
 
@@ -312,10 +312,10 @@ async fn do_sput_operation<T>(
     data_dir_width: u8,
 ) -> Result<(String, u64), String>
 where
-    T: Read + Write,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let mut size_buffer = [0u8; 8];
-    let Ok(bytes_read) = stream.read(&mut size_buffer) else {
+    let Ok(bytes_read) = stream.read(&mut size_buffer).await else {
         return Err("Failed to read size of SPUT operation.".to_string());
     };
 
@@ -329,22 +329,22 @@ where
     let temporary_file_name = Path::new(&temporary_file_uuid);
     let temporary_file_location = temporary_directory.join(temporary_file_name);
 
-    let Ok(mut temporary_file) = File::create(temporary_file_location.clone()) else {
+    let Ok(mut temporary_file) = File::create(temporary_file_location.clone()).await else {
         return Err("Failed to open temporary file.".to_string());
     };
 
     let mut buffer = [0u8; 1024];
-    let Ok(mut read_amount) = stream.read(&mut buffer) else {
+    let Ok(mut read_amount) = stream.read(&mut buffer).await else {
         return Err("Failed to read file stream.".to_string());
     };
 
     let mut total_read_amount = read_amount;
 
     while read_amount > 0 {
-        let Ok(_) = temporary_file.write_all(&buffer[0..read_amount]) else {
+        let Ok(_) = temporary_file.write_all(&buffer[0..read_amount]).await else {
             return Err("Failed to write file stream to temporary file.".to_string());
         };
-        let result_read_amount = stream.read(&mut buffer);
+        let result_read_amount = stream.read(&mut buffer).await;
         if result_read_amount.is_err() {
             return Err("Failed to read file stream.".to_string());
         }
@@ -352,7 +352,7 @@ where
         total_read_amount += read_amount;
     }
 
-    let Ok(_) = temporary_file.flush() else {
+    let Ok(_) = temporary_file.flush().await else {
         return Err("Failed to flush temporary file.".to_string());
     };
 
@@ -388,24 +388,24 @@ where
         return Err("Failed to decode hash to bytes.".to_string());
     };
 
-    if stream.write(&decoded_hash).is_err() {
+    if stream.write_all(&decoded_hash).await.is_err() {
         return Err("Failed to write key to stream.".to_string());
-    }
+    };
 
     Ok((hash, total_read_amount as u64))
 }
 
-fn do_sget_operation<T>(
+async fn do_sget_operation<T>(
     stream: &mut T,
     data_directory: &Path,
     data_dir_depth: u8,
     data_dir_width: u8,
 ) -> Result<(String, u64), String>
 where
-    T: Read + Write,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let mut key_buffer = [0u8; 32];
-    let Ok(size_key_buffer_written) = stream.read(&mut key_buffer) else {
+    let Ok(size_key_buffer_written) = stream.read(&mut key_buffer).await else {
         return Err("Failed to read key.".to_string());
     };
 
@@ -419,41 +419,41 @@ where
         return Err("Failed to get path to file from given key.".to_string());
     };
 
-    let Ok(mut file) = File::open(data_directory.join(Path::new(&path_to_file))) else {
+    let Ok(mut file) = File::open(data_directory.join(Path::new(&path_to_file))).await else {
         return Err(format!(
             "Failed to open file {}, it might not be readable or it might not exist.",
             path_to_file
         ));
     };
 
-    let Ok(metadata) = file.metadata() else {
+    let Ok(metadata) = file.metadata().await else {
         return Err("Failed to get file metadata.".to_string());
     };
 
     let buffer_to_write: [u8; 8] = cast_u64_to_u8_array(metadata.len());
 
-    let Ok(_) = stream.write_all(&buffer_to_write) else {
+    let Ok(_) = stream.write_all(&buffer_to_write).await else {
         return Err("Failed to write size to stream.".to_string());
     };
 
-    let Ok(_) = std::io::copy(&mut file, stream) else {
+    let Ok(_) = copy(&mut file, stream).await else {
         return Err("Failed to write file to stream.".to_string());
     };
 
     Ok((file_name, metadata.len()))
 }
 
-fn do_size_operation<T>(
+async fn do_size_operation<T>(
     stream: &mut T,
     data_directory: &Path,
     data_dir_depth: u8,
     data_dir_width: u8,
 ) -> Result<(String, u64), String>
 where
-    T: Read + Write,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let mut key_buffer = [0u8; 32];
-    let Ok(size_key_buffer_written) = stream.read(&mut key_buffer) else {
+    let Ok(size_key_buffer_written) = stream.read(&mut key_buffer).await else {
         return Err("Failed to read key.".to_string());
     };
 
@@ -467,19 +467,19 @@ where
         return Err("SIZE Failed to get path to file from given key.".to_string());
     };
 
-    let Ok(file) = File::open(data_directory.join(Path::new(&path_to_file))) else {
+    let Ok(file) = File::open(data_directory.join(Path::new(&path_to_file))).await else {
         return Err(
             "SIZE Failed to open file, it might not be readable or it might not exist.".to_string(),
         );
     };
 
-    let Ok(metadata) = file.metadata() else {
+    let Ok(metadata) = file.metadata().await else {
         return Err("SIZE Failed to get file metadata.".to_string());
     };
 
     let buffer_to_write: [u8; 8] = cast_u64_to_u8_array(metadata.len());
 
-    let Ok(_) = stream.write_all(&buffer_to_write) else {
+    let Ok(_) = stream.write_all(&buffer_to_write).await else {
         return Err("SIZE Failed to write size to stream.".to_string());
     };
 
@@ -491,7 +491,7 @@ async fn do_stats_operation<T>(
     service_data: Arc<Mutex<ServiceData>>,
 ) -> Result<(), String>
 where
-    T: Read + Write,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let service_data_lock = service_data.lock().await;
     let service_data_copy = *service_data_lock;
@@ -511,7 +511,7 @@ where
         connections_active,
     ];
     for buffer in all_buffers {
-        let Ok(_) = stream.write_all(&buffer) else {
+        let Ok(_) = stream.write_all(&buffer).await else {
             return Err("Failed to write to stream.".to_string());
         };
     }
@@ -526,21 +526,18 @@ async fn handle_stream<T>(
     data_dir_depth: u8,
     data_dir_width: u8,
     service_data: Arc<Mutex<ServiceData>>,
-) -> bool
-where
-    T: Read + Write,
+) where
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     let mut operation_byte_buffer = [0u8];
-    let result_first_byte_read = stream.read(&mut operation_byte_buffer);
-    if result_first_byte_read.is_err() {
+    let Ok(first_byte_read) = stream.read(&mut operation_byte_buffer).await else {
         println!("INITIAL Failed to read operation byte for connection");
-        return false;
-    }
+        return;
+    };
 
-    let first_byte_read = result_first_byte_read.unwrap();
     if first_byte_read != 1 {
         println!("INITIAL No operation byte specified.");
-        return false;
+        return;
     }
     let operation_byte = operation_byte_buffer[0];
     match operation_byte {
@@ -550,7 +547,9 @@ where
                 data_directory.as_ref(),
                 data_dir_depth,
                 data_dir_width,
-            ) {
+            )
+            .await
+            {
                 Ok(_) => {
                     println!("LIST Operation completed successfully.");
                 }
@@ -586,7 +585,9 @@ where
                 data_directory.as_ref(),
                 data_dir_depth,
                 data_dir_width,
-            ) {
+            )
+            .await
+            {
                 Ok((file_name, length)) => {
                     println!(
                         "GET File with key {} ({}) written to stream.",
@@ -632,7 +633,9 @@ where
                 data_directory.as_ref(),
                 data_dir_depth,
                 data_dir_width,
-            ) {
+            )
+            .await
+            {
                 Ok((file_name, length)) => {
                     println!(
                         "SGET File with key {} ({}) written to stream.",
@@ -653,7 +656,9 @@ where
                 data_directory.as_ref(),
                 data_dir_depth,
                 data_dir_width,
-            ) {
+            )
+            .await
+            {
                 Ok((file_name, length)) => {
                     println!(
                         "SIZE Size of file with key {} ({}) written to stream.",
@@ -674,18 +679,12 @@ where
             }
         },
         _ => {
-            return false;
+            return;
         }
     }
     let mut service_data_lock = service_data.lock().await;
     service_data_lock.connections_accepted += 1;
     drop(service_data_lock);
-
-    stream.flush().unwrap_or_else(|_| {
-        println!("SHUTDOWN Stream could not be flushed.");
-    });
-
-    true
 }
 
 #[derive(Clone, Copy)]
@@ -697,15 +696,18 @@ struct ServiceData {
     connections_active: u64,
 }
 
-fn start_listener(
+async fn start_listener(
     host_name: String,
     port: String,
     data_directory: &Path,
     temporary_directory: &Path,
     data_dir_depth: u8,
     data_dir_width: u8,
-) -> bool {
-    let result_listener = TcpListener::bind(format!("{}:{}", host_name, port));
+) {
+    let Ok(listener) = TcpListener::bind(format!("{}:{}", host_name, port)).await else {
+        println!("BOOT Failed to start listener on {}:{}", host_name, port);
+        return;
+    };
 
     let service_data = Arc::new(Mutex::new(ServiceData {
         cycle_counter: 0,
@@ -715,14 +717,10 @@ fn start_listener(
         connections_active: 0,
     }));
 
-    if result_listener.is_err() {
-        println!("BOOT Failed to start listener on {}:{}", host_name, port);
-        return false;
-    }
-    let listener = result_listener.unwrap();
     println!("BOOT Started berthad service on {}:{}", host_name, port);
 
-    for result_stream in listener.incoming() {
+    loop {
+        let result_stream = listener.accept().await;
         let service_data_clone = service_data.clone();
         let data_directory_clone = Arc::from(data_directory);
         let temporary_directory_clone = Arc::from(temporary_directory);
@@ -733,7 +731,7 @@ fn start_listener(
             service_data_lock.cycle_counter += 1;
             drop(service_data_lock);
 
-            if let Ok(mut stream) = result_stream {
+            if let Ok((mut stream, _)) = result_stream {
                 let mut service_data_lock = service_data_clone.lock().await;
                 service_data_lock.connections_active += 1;
                 drop(service_data_lock);
@@ -747,8 +745,11 @@ fn start_listener(
                     service_data_clone.clone(),
                 )
                 .await;
-                if stream.flush().is_err() {
+                if stream.flush().await.is_err() {
                     println!("SHUTDOWN Stream flush failed.");
+                }
+                if stream.shutdown().await.is_err() {
+                    println!("SHUTDOWN Stream shutdown failed.");
                 }
 
                 let mut service_data_lock = service_data_clone.lock().await;
@@ -761,8 +762,6 @@ fn start_listener(
             }
         });
     }
-
-    true
 }
 
 #[tokio::main]
@@ -799,14 +798,86 @@ async fn main() {
         temporary_path,
         CFG_DATA_DIR_DEPTH,
         CFG_DATA_DIR_WIDTH,
-    );
+    )
+    .await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockstream::MockStream;
+    use std::io::{Cursor, Error};
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
     use tempdir::TempDir;
+    use tokio::io::ReadBuf;
+
+    fn new_cursor() -> Cursor<Vec<u8>> {
+        Cursor::new(Vec::new())
+    }
+
+    struct MockStream {
+        to_read: Cursor<Vec<u8>>,
+        written: Cursor<Vec<u8>>,
+    }
+
+    impl MockStream {
+        /// Creates a new mock stream with nothing to read.
+        pub fn empty() -> MockStream {
+            MockStream::new(&[])
+        }
+
+        /// Creates a new mock stream with the specified bytes to read.
+        pub fn new(initial: &[u8]) -> MockStream {
+            MockStream {
+                to_read: Cursor::new(initial.to_owned()),
+                written: Cursor::new(vec![]),
+            }
+        }
+
+        /// Add bytes to read.
+        pub fn push_bytes_to_read(&mut self, bytes_to_read: &[u8]) {
+            let avail = self.to_read.get_ref().len();
+            if self.to_read.position() == avail as u64 {
+                self.to_read = new_cursor();
+            }
+            self.to_read
+                .get_mut()
+                .extend(bytes_to_read.iter().map(|c| *c));
+        }
+
+        /// Gets a slice of bytes representing the data that has been written.
+        pub fn written(&self) -> &[u8] {
+            self.written.get_ref()
+        }
+    }
+
+    impl AsyncRead for MockStream {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut (self.get_mut()).to_read).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for MockStream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize, Error>> {
+            Pin::new(&mut (self.get_mut()).written).poll_write(cx, buf)
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+            Pin::new(&mut (self.get_mut()).written).poll_flush(cx)
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+            Pin::new(&mut (self.get_mut()).written).poll_shutdown(cx)
+        }
+    }
 
     fn initialize_directories() -> (TempDir, TempDir) {
         let data_dir = TempDir::new(&Uuid::new_v4().to_string()).unwrap();
@@ -855,21 +926,22 @@ mod tests {
         let (data_dir, _) = initialize_directories();
         let file_name =
             "0f7783b7761110eb51bd81b122f523055e7d9e7263f61093eb29ea504aa61f90".to_string();
-        let mut file =
-            File::create(data_dir.path().join(PathBuf::from(file_name.clone()))).unwrap();
-        file.write(b"These are the file contents").unwrap();
-        let mut mocked_stream = MockStream::new();
+        let mut file = File::create(data_dir.path().join(PathBuf::from(file_name.clone())))
+            .await
+            .unwrap();
+        file.write(b"These are the file contents").await.unwrap();
 
         let mut decoded = [0; 32];
         hex::decode_to_slice(file_name, &mut decoded).unwrap();
 
-        mocked_stream.push_bytes_to_read(&decoded);
+        let mut mocked_stream = MockStream::new(&decoded);
 
-        let result = do_get_operation(&mut mocked_stream, data_dir.path(), 0, 0);
+        let result = do_get_operation(&mut mocked_stream, data_dir.path(), 0, 0).await;
         assert!(result.is_ok());
 
-        let file_content = mocked_stream.pop_bytes_written().clone();
-        assert_eq!(file_content.as_slice(), b"These are the file contents");
+        let written = mocked_stream.written();
+
+        assert_eq!(&written, b"These are the file contents");
     }
 
     #[tokio::test]
@@ -877,65 +949,64 @@ mod tests {
         let (data_dir, _) = initialize_directories();
         let file_name =
             "0f7783b7761110eb51bd81b122f523055e7d9e7263f61093eb29ea504aa61f90".to_string();
-        let mut file =
-            File::create(data_dir.path().join(PathBuf::from(file_name.clone()))).unwrap();
-        file.write(b"These are the file contents").unwrap();
-        let mut mocked_stream = MockStream::new();
+        let mut file = File::create(data_dir.path().join(PathBuf::from(file_name.clone())))
+            .await
+            .unwrap();
+        file.write(b"These are the file contents").await.unwrap();
 
         let mut decoded = [0; 32];
         hex::decode_to_slice(file_name, &mut decoded).unwrap();
 
-        mocked_stream.push_bytes_to_read(&decoded);
-
-        let result = do_sget_operation(&mut mocked_stream, data_dir.path(), 0, 0);
+        let mut mocked_stream = MockStream::new(&decoded);
+        let result = do_sget_operation(&mut mocked_stream, data_dir.path(), 0, 0).await;
         assert!(result.is_ok());
 
-        let response = mocked_stream.pop_bytes_written().clone();
-        let (file_size, file_content): (&[u8], &[u8]) = response.split_at(8);
-        assert_eq!(file_content, b"These are the file contents");
-        assert_eq!(file_size, [27, 0, 0, 0, 0, 0, 0, 0]);
+        let written = mocked_stream.written();
+
+        assert_eq!(written[0..8], [27u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]);
+        assert_eq!(&written[8..], b"These are the file contents");
     }
 
     #[tokio::test]
     async fn test_put_operation() {
         let (data_dir, tmp_dir) = initialize_directories();
-        let mut mocked_stream = MockStream::new();
         let bytes_to_read = b"These are file contents.";
-        mocked_stream.push_bytes_to_read(bytes_to_read);
+
+        let mut mocked_stream = MockStream::new(bytes_to_read);
         let result =
             do_put_operation(&mut mocked_stream, data_dir.path(), tmp_dir.path(), 2, 2).await;
         assert!(result.is_ok());
 
-        let filename = mocked_stream.pop_bytes_written().clone();
+        let filename = mocked_stream.written();
 
-        mocked_stream.flush().unwrap();
-
-        mocked_stream.push_bytes_to_read(&filename.as_slice());
-        let result = do_get_operation(&mut mocked_stream, data_dir.path(), 2, 2);
+        let mut mocked_stream = MockStream::new(filename);
+        let result = do_get_operation(&mut mocked_stream, data_dir.path(), 2, 2).await;
         assert!(result.is_ok());
 
-        assert_eq!(mocked_stream.pop_bytes_written().as_slice(), bytes_to_read);
+        assert_eq!(mocked_stream.written(), bytes_to_read);
     }
 
     #[tokio::test]
     async fn test_sput_operation() {
         let (data_dir, tmp_dir) = initialize_directories();
-        let mut mocked_stream = MockStream::new();
         let bytes_to_read = b"These are file contents.";
+
+        let mut mocked_stream = MockStream::empty();
         mocked_stream.push_bytes_to_read(&cast_u64_to_u8_array(bytes_to_read.len() as u64));
         mocked_stream.push_bytes_to_read(bytes_to_read);
+
         let result =
             do_sput_operation(&mut mocked_stream, data_dir.path(), tmp_dir.path(), 2, 2).await;
         assert!(result.is_ok());
 
-        let filename = mocked_stream.pop_bytes_written().clone();
-        mocked_stream.flush().unwrap();
+        let filename = mocked_stream.written();
+        let mut mocked_stream = MockStream::empty();
 
-        mocked_stream.push_bytes_to_read(&filename.as_slice());
-        let result = do_get_operation(&mut mocked_stream, data_dir.path(), 2, 2);
+        mocked_stream.push_bytes_to_read(filename);
+        let result = do_get_operation(&mut mocked_stream, data_dir.path(), 2, 2).await;
         assert!(result.is_ok());
 
-        assert_eq!(mocked_stream.pop_bytes_written().as_slice(), bytes_to_read);
+        assert_eq!(mocked_stream.written(), bytes_to_read);
     }
 
     #[tokio::test]
@@ -943,20 +1014,22 @@ mod tests {
         let (data_dir, _) = initialize_directories();
         let file_name =
             "0f7783b7761110eb51bd81b122f523055e7d9e7263f61093eb29ea504aa61f90".to_string();
-        let mut file =
-            File::create(data_dir.path().join(PathBuf::from(file_name.clone()))).unwrap();
-        file.write(b"These are the file contents").unwrap();
-        let mut mocked_stream = MockStream::new();
+        let mut file = File::create(data_dir.path().join(PathBuf::from(file_name.clone())))
+            .await
+            .unwrap();
+        file.write(b"These are the file contents").await.unwrap();
+
+        let mut mocked_stream = MockStream::empty();
 
         let mut decoded = [0; 32];
         hex::decode_to_slice(file_name, &mut decoded).unwrap();
 
         mocked_stream.push_bytes_to_read(&decoded);
 
-        let result = do_size_operation(&mut mocked_stream, data_dir.path(), 0, 0);
+        let result = do_size_operation(&mut mocked_stream, data_dir.path(), 0, 0).await;
         assert!(result.is_ok());
 
-        let file_size = mocked_stream.pop_bytes_written().clone();
-        assert_eq!(file_size.as_slice(), [27, 0, 0, 0, 0, 0, 0, 0]);
+        let file_size = mocked_stream.written();
+        assert_eq!(file_size, [27, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

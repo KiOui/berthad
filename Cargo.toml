@@ -17,4 +17,3 @@ uuid = { version = "1.4.1", features = ["v4"] }
 
 [dev-dependencies]
 tempdir = "0.3.7"
-mockstream = "0.0.3"
