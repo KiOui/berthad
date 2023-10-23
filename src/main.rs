@@ -464,23 +464,23 @@ where
     let file_name = hex::encode(key_buffer);
     let Ok(path_to_file) = get_path_to_file(file_name.clone(), 0, data_dir_depth, data_dir_width)
     else {
-        return Err("SIZE Failed to get path to file from given key.".to_string());
+        return Err("Failed to get path to file from given key.".to_string());
     };
 
     let Ok(file) = File::open(data_directory.join(Path::new(&path_to_file))).await else {
         return Err(
-            "SIZE Failed to open file, it might not be readable or it might not exist.".to_string(),
+            "Failed to open file, it might not be readable or it might not exist.".to_string(),
         );
     };
 
     let Ok(metadata) = file.metadata().await else {
-        return Err("SIZE Failed to get file metadata.".to_string());
+        return Err("Failed to get file metadata.".to_string());
     };
 
     let buffer_to_write: [u8; 8] = cast_u64_to_u8_array(metadata.len());
 
     let Ok(_) = stream.write_all(&buffer_to_write).await else {
-        return Err("SIZE Failed to write size to stream.".to_string());
+        return Err("Failed to write size to stream.".to_string());
     };
 
     Ok((file_name, metadata.len()))
