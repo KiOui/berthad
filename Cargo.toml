@@ -4,13 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytemuck   = { version = "1.16" }
-bytes      = { version = "1.6" }
+bytemuck   = { version = "1.21" }
 hex        = { version = "0.4" }
 sha256     = { version = "1.5" }
-threadpool = { version = "1.8" }
-tokio      = { version = "1.38", features = ["full"] }
-uuid       = { version = "1.10", features = ["v4"] }
+tokio      = { version = "1.43", features = ["full"] }
+uuid       = { version = "1.12", features = ["v4"] }
 
 [dev-dependencies]
 tempdir = { version = "0.3" }
